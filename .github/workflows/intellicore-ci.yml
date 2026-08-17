@@ -213,19 +213,19 @@ jobs:
   # SECURITY / SECRET SCANNING
   # ============================================================
   security-checks:
-    name: Security Checks
-    runs-on: ubuntu-latest
+  name: Security Checks
+  runs-on: ubuntu-latest
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+  steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
-      - name: Scan repository for leaked secrets
-        uses: trufflesecurity/trufflehog@main
-        with:
-          extra_args: --results=verified,unknown --github-actions
+    - name: Scan repository for leaked secrets
+      uses: trufflesecurity/trufflehog@main
+      with:
+        extra_args: --results=verified,unknown
 
 
   # ============================================================
