@@ -1,0 +1,271 @@
+# # This is a basic workflow to help you get started with Actions
+
+# name: CI
+
+# # Controls when the workflow will run
+# on:
+#   # Triggers the workflow on push or pull request events but only for the "main" branch
+#   push:
+#     branches: [ "main" ]
+#   pull_request:
+#     branches: [ "main" ]
+
+#   # Allows you to run this workflow manually from the Actions tab
+#   workflow_dispatch:
+
+# # A workflow run is made up of one or more jobs that can run sequentially or in parallel
+# jobs:
+#   # This workflow contains a single job called "build"
+#   build:
+#     # The type of runner that the job will run on
+#     runs-on: ubuntu-latest
+
+#     # Steps represent a sequence of tasks that will be executed as part of the job
+#     steps:
+#       # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+#       - uses: actions/checkout@v4
+
+#       # Runs a single command using the runners shell
+#       - name: Run a one-line script
+#         run: echo Hello, world!
+
+#       # Runs a set of commands using the runners shell
+#       - name: Run a multi-line script
+#         run: |
+#           echo Add other actions to build,
+#           echo test, and deploy your project.
+name: IntelliCore AI - CI
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+
+  pull_request:
+    branches:
+      - main
+      - develop
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+
+  # ============================================================
+  # 1. Python / Backend / ML / LLM checks
+  # ============================================================
+  python-check:
+    name: Python Checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: "pip"
+
+      - name: Check Python files
+        shell: bash
+        run: |
+          if find . -name "*.py" -not -path "./.git/*" | grep -q .; then
+            echo "Python files found."
+          else
+            echo "No Python files yet. Skipping Python checks."
+          fi
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            echo "No requirements.txt yet. Skipping dependency installation."
+          fi
+
+      - name: Run Python tests
+        shell: bash
+        run: |
+          if [ -d tests ]; then
+            pip install pytest
+            pytest
+          else
+            echo "No tests directory yet. Skipping tests."
+          fi
+
+
+  # ============================================================
+  # 2. Frontend / Next.js / React checks
+  # ============================================================
+  frontend-check:
+    name: Frontend Checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          if [ -f package.json ]; then
+            npm ci
+          else
+            echo "No package.json yet. Skipping frontend setup."
+          fi
+
+      - name: Run lint
+        shell: bash
+        run: |
+          if [ -f package.json ]; then
+            npm run lint --if-present
+          else
+            echo "No frontend yet. Skipping lint."
+          fi
+
+      - name: Build frontend
+        shell: bash
+        run: |
+          if [ -f package.json ]; then
+            npm run build --if-present
+          else
+            echo "No frontend yet. Skipping build."
+          fi
+
+
+  # ============================================================
+  # 3. Tauri / Rust checks
+  # ============================================================
+  tauri-check:
+    name: Tauri / Rust Checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Check Rust formatting
+        shell: bash
+        run: |
+          if [ -f Cargo.toml ]; then
+            cargo fmt --all -- --check
+          else
+            echo "No Cargo.toml yet. Skipping Rust formatting."
+          fi
+
+      - name: Cargo check
+        shell: bash
+        run: |
+          if [ -f Cargo.toml ]; then
+            cargo check --all-targets
+          else
+            echo "No Rust project yet. Skipping cargo check."
+          fi
+
+      - name: Clippy
+        shell: bash
+        run: |
+          if [ -f Cargo.toml ]; then
+            cargo clippy --all-targets --all-features -- -D warnings
+          else
+            echo "No Rust project yet. Skipping Clippy."
+          fi
+
+      - name: Rust tests
+        shell: bash
+        run: |
+          if [ -f Cargo.toml ]; then
+            cargo test
+          else
+            echo "No Rust project yet. Skipping Rust tests."
+          fi
+
+
+  # ============================================================
+  # 4. Docker validation
+  # ============================================================
+  docker-check:
+    name: Docker Validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate Dockerfile
+        shell: bash
+        run: |
+          if [ -f Dockerfile ]; then
+            docker build --check .
+          else
+            echo "No Dockerfile yet. Skipping Docker validation."
+          fi
+
+
+  # ============================================================
+  # 5. Security / Secret scanning
+  # ============================================================
+  security-check:
+    name: Security Checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan for leaked secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+
+  # ============================================================
+  # 6. Final CI gate
+  # ============================================================
+  ci-status:
+    name: IntelliCore CI Status
+    runs-on: ubuntu-latest
+
+    needs:
+      - python-check
+      - frontend-check
+      - tauri-check
+      - docker-check
+      - security-check
+
+    if: always()
+
+    steps:
+      - name: Check all jobs
+        shell: bash
+        run: |
+          if [[ "${{ needs.python-check.result }}" != "success" ]] ||
+             [[ "${{ needs.frontend-check.result }}" != "success" ]] ||
+             [[ "${{ needs.tauri-check.result }}" != "success" ]] ||
+             [[ "${{ needs.docker-check.result }}" != "success" ]] ||
+             [[ "${{ needs.security-check.result }}" != "success" ]]; then
+            echo "One or more CI checks failed."
+            exit 1
+          fi
+
+          echo "All IntelliCore CI checks passed."
