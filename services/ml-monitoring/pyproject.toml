@@ -1,0 +1,21 @@
+[project]
+name = "intellicore-ml-monitoring"
+version = "0.1.0"
+description = "ML monitoring service for IntelliCore AI"
+requires-python = ">=3.10"
+
+dependencies = [
+    "fastapi",
+    "pydantic",
+    "uvicorn",
+    "numpy",
+    "pandas",
+    "scikit-learn",
+    "scipy",
+    "shap",
+    "lime",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
