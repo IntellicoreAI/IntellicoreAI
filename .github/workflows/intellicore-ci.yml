@@ -202,11 +202,15 @@ jobs:
         if: steps.docker-project.outputs.exists == 'true'
         uses: docker/setup-buildx-action@v3
 
-      - name: Validate Docker build
+      - name: Validate Docker builds
         if: steps.docker-project.outputs.exists == 'true'
         shell: bash
         run: |
-          docker build --check .
+          for dockerfile in $(find services -name "Dockerfile" -not -path "*/.git/*"); do
+            service_dir=$(dirname "$dockerfile")
+            echo "Validating $dockerfile"
+            docker build --check "$service_dir"
+          done
 
 
     # ============================================================
