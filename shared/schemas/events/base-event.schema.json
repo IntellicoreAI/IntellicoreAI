@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "IntelliCore Event",
+  "description": "Common telemetry event contract for LLM, Agentic AI, and ML systems.",
+  "type": "object",
+  "required": [
+    "event_id",
+    "timestamp",
+    "system_type",
+    "project_id",
+    "trace_id",
+    "span_id",
+    "event_type",
+    "status"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "description": "Unique identifier for the telemetry event."
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Time at which the event occurred."
+    },
+    "system_type": {
+      "type": "string",
+      "enum": [
+        "LLM",
+        "AGENT",
+        "ML"
+      ],
+      "description": "AI system paradigm that generated the event."
+    },
+    "project_id": {
+      "type": "string",
+      "description": "Application or project identifier."
+    },
+    "model_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Model or model-version identifier when applicable."
+    },
+    "trace_id": {
+      "type": "string",
+      "description": "Identifier connecting related execution events."
+    },
+    "span_id": {
+      "type": "string",
+      "description": "Identifier for one operation within a trace."
+    },
+    "event_type": {
+      "type": "string",
+      "description": "Type of telemetry event, such as LLM call, tool call, prediction, or monitoring signal."
+    },
+    "input": {
+      "description": "Relevant input payload or safe reference."
+    },
+    "output": {
+      "description": "Relevant output payload or safe reference."
+    },
+    "latency": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0,
+      "description": "Execution duration."
+    },
+    "status": {
+      "type": "string",
+      "description": "Execution or event status."
+    },
+    "error": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Error information when applicable."
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Paradigm-specific telemetry information."
+    }
+  },
+  "additionalProperties": false
+}
