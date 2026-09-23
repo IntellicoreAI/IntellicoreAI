@@ -4,6 +4,7 @@ import uuid
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
 
+from ..analytics.analyzer import calculate_agent_metrics
 from ..diagnosis.analyzer import diagnose_agent_execution
 from ..instrumentation.telemetry import AgentTelemetry
 from ..llm.model import get_qwen3
@@ -178,10 +179,16 @@ def execute_tools(state: AgentState) -> AgentState:
         }
     )
 
+    # Preserve telemetry collected by previous nodes and append
+    # the current tool telemetry event.
+    telemetry_events = state.get("telemetry_events", []).copy()
+    telemetry_events.append(tool_event)
+
     return {
         "messages": messages,
         "tool_results": tool_results,
         "trajectory": trajectory,
+        "telemetry_events": telemetry_events,
         "trace_id": trace_id,
         "current_node": "tool_node",
         "execution_start_time": state.get("execution_start_time"),
@@ -195,13 +202,14 @@ def execute_task(state: AgentState) -> AgentState:
     Tool execution is performed by LangGraph ToolNode.
     This node observes the resulting messages and runs
     IntelliCore analysis, diagnosis, recommendations,
-    and telemetry generation.
+    analytics, and telemetry generation.
     """
 
     task = state.get("task", "")
     trajectory = state.get("trajectory", []).copy()
     tool_calls = state.get("tool_calls", []).copy()
     tool_results = state.get("tool_results", []).copy()
+    telemetry_events = state.get("telemetry_events", []).copy()
     memory = state.get("memory", []).copy()
     messages = state.get("messages", [])
 
@@ -303,6 +311,10 @@ def execute_task(state: AgentState) -> AgentState:
         },
     )
 
+    # Preserve the final execute_task telemetry event together
+    # with telemetry collected by the tool node.
+    telemetry_events.append(node_event)
+
     loop_analysis = detect_repeated_nodes(trajectory)
 
     reasoning_analysis = analyze_execution_reasoning(
@@ -363,6 +375,16 @@ def execute_task(state: AgentState) -> AgentState:
         time.perf_counter() - execution_start_time
     ) * 1000
 
+    # Calculate aggregated Agentic execution metrics from the
+    # complete trajectory, tool activity, and telemetry.
+    analytics = calculate_agent_metrics(
+        trajectory=trajectory,
+        tool_calls=tool_calls,
+        tool_results=tool_results,
+        telemetry_events=telemetry_events,
+        status=tool_status,
+    )
+
     event = AgenticEvent(
         event_id=str(uuid.uuid4()),
         project_id="intellicore-agentic",
@@ -395,8 +417,9 @@ def execute_task(state: AgentState) -> AgentState:
             "failure_analysis": failure_analysis,
             "diagnosis": diagnosis,
             "recommendation": recommendation,
-            "telemetry_events": telemetry.events,
+            "telemetry_events": telemetry_events,
             "execution_latency_ms": execution_latency_ms,
+            "analytics": analytics,
         },
     )
 
@@ -410,6 +433,7 @@ def execute_task(state: AgentState) -> AgentState:
         "trajectory": trajectory,
         "tool_calls": tool_calls,
         "tool_results": tool_results,
+        "telemetry_events": telemetry_events,
         "memory": memory,
         "memory_analysis": memory_analysis,
         "trace_analysis": trace_analysis,
@@ -424,6 +448,7 @@ def execute_task(state: AgentState) -> AgentState:
         "failure_analysis": failure_analysis,
         "diagnosis": diagnosis,
         "recommendation": recommendation,
+        "analytics": analytics,
         "messages": messages,
         "execution_start_time": execution_start_time,
     }

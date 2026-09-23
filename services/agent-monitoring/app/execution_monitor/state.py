@@ -19,6 +19,9 @@ class AgentState(TypedDict, total=False):
     tool_calls: list[dict[str, Any]]
     tool_results: list[dict[str, Any]]
 
+    # Telemetry collected across the complete Agentic execution.
+    telemetry_events: list[dict[str, Any]]
+
     memory: list[dict[str, Any]]
     memory_analysis: dict[str, Any]
 
@@ -39,5 +42,8 @@ class AgentState(TypedDict, total=False):
     failure_analysis: dict[str, Any]
     diagnosis: dict[str, Any]
     recommendation: dict[str, Any]
+
+    # Aggregated Agentic execution metrics.
+    analytics: dict[str, Any]
 
     event: dict[str, Any]
