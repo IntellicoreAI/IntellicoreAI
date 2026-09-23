@@ -1,13 +1,16 @@
+import time
 import uuid
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
 
+from ..diagnosis.analyzer import diagnose_agent_execution
 from ..instrumentation.telemetry import AgentTelemetry
 from ..llm.model import get_qwen3
 from ..loop_detector.detector import detect_repeated_nodes
 from ..memory_analyzer.analyzer import analyze_memory
 from ..reasoning_analyzer.analyzer import analyze_execution_reasoning
+from ..signals.event_publisher import publish_event
 from ..signals.event_schema import AgenticEvent
 from ..signals.failure_signals import detect_failure_signals
 from ..tool_monitor.tools import check_transaction_status
@@ -17,6 +20,12 @@ from .state import AgentState
 
 def agent_llm(state: AgentState) -> AgentState:
     """Run the real local Qwen3 agent model."""
+
+    # Start the overall agent execution timer on the first LLM node.
+    execution_start_time = state.get("execution_start_time")
+
+    if execution_start_time is None:
+        execution_start_time = time.perf_counter()
 
     model = get_qwen3().bind_tools([check_transaction_status])
 
@@ -35,6 +44,7 @@ def agent_llm(state: AgentState) -> AgentState:
     return {
         "messages": messages + [response],
         "current_node": "agent_llm",
+        "execution_start_time": execution_start_time,
     }
 
 
@@ -73,6 +83,7 @@ def execute_tools(state: AgentState) -> AgentState:
 
     try:
         result = tool_node.invoke(state)
+
     except Exception as exc:
         result = {"messages": []}
 
@@ -117,6 +128,7 @@ def execute_tools(state: AgentState) -> AgentState:
             tool_call = tool_calls[0]
             tool_name = tool_call.get("name", "unknown_tool")
             tool_call_id = tool_call.get("id")
+
             break
 
     # Identify the actual ToolNode result.
@@ -171,6 +183,7 @@ def execute_tools(state: AgentState) -> AgentState:
         "trajectory": trajectory,
         "trace_id": trace_id,
         "current_node": "tool_node",
+        "execution_start_time": state.get("execution_start_time"),
     }
 
 
@@ -321,6 +334,27 @@ def execute_task(state: AgentState) -> AgentState:
         ),
     )
 
+    # Diagnose the execution using observable evidence.
+    diagnosis = diagnose_agent_execution(
+        failure_analysis=failure_analysis,
+        tool_results=tool_results,
+        trajectory=trajectory,
+        reasoning_analysis=reasoning_analysis,
+        loop_analysis=loop_analysis,
+        trace_analysis=trace_analysis,
+    )
+
+    # Measure the complete agent execution from the first LLM node
+    # until final event creation.
+    execution_start_time = state.get("execution_start_time")
+
+    if execution_start_time is None:
+        execution_start_time = time.perf_counter()
+
+    execution_latency_ms = (
+        time.perf_counter() - execution_start_time
+    ) * 1000
+
     event = AgenticEvent(
         event_id=str(uuid.uuid4()),
         project_id="intellicore-agentic",
@@ -332,7 +366,11 @@ def execute_task(state: AgentState) -> AgentState:
             "task": task,
         },
         output=result,
-        latency=node_event["latency_ms"],
+
+        # Common IntelliCore event latency represents
+        # the complete agent execution in milliseconds.
+        latency=execution_latency_ms,
+
         status=tool_status,
         error=tool_error,
         metadata={
@@ -347,8 +385,15 @@ def execute_task(state: AgentState) -> AgentState:
             "memory_analysis": memory_analysis,
             "trace_analysis": trace_analysis,
             "failure_analysis": failure_analysis,
+            "diagnosis": diagnosis,
             "telemetry_events": telemetry.events,
+            "execution_latency_ms": execution_latency_ms,
         },
+    )
+
+    # Publish the validated Agentic event to the IntelliCore API.
+    publish_result = publish_event(
+        event.model_dump(mode="json")
     )
 
     return {
@@ -368,7 +413,9 @@ def execute_task(state: AgentState) -> AgentState:
         "loop_analysis": loop_analysis,
         "event": event.model_dump(mode="json"),
         "failure_analysis": failure_analysis,
+        "diagnosis": diagnosis,
         "messages": messages,
+        "execution_start_time": execution_start_time,
     }
 
 

@@ -11,4 +11,6 @@ def get_qwen3():
         model=QWEN3_MODEL,
         temperature=0,
         disable_streaming=True,
+        reasoning=False,
+        num_predict=256,
     )

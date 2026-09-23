@@ -30,12 +30,13 @@ class AgentState(TypedDict, total=False):
 
     trace_id: str
     span_id: str
+    execution_start_time: float
 
     attempt_count: int
     max_attempts: int
 
     loop_analysis: dict[str, Any]
     failure_analysis: dict[str, Any]
+    diagnosis: dict[str, Any]
 
     event: dict[str, Any]
-

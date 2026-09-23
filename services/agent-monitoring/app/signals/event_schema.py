@@ -1,4 +1,3 @@
-
 from datetime import datetime, timezone
 from typing import Any, Literal
 
@@ -27,10 +26,14 @@ class AgenticEvent(BaseModel):
     input: Any = None
     output: Any = None
 
-    latency: float | None = None
+    # Common IntelliCore event latency is measured in milliseconds.
+    latency: float | None = Field(
+        default=None,
+        description="Execution latency in milliseconds.",
+        ge=0,
+    )
 
     status: str
     error: str | None = None
 
     metadata: dict[str, Any] = Field(default_factory=dict)
-
