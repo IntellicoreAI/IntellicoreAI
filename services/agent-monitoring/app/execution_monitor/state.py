@@ -38,5 +38,6 @@ class AgentState(TypedDict, total=False):
     loop_analysis: dict[str, Any]
     failure_analysis: dict[str, Any]
     diagnosis: dict[str, Any]
+    recommendation: dict[str, Any]
 
     event: dict[str, Any]

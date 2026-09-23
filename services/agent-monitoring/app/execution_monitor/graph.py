@@ -10,6 +10,7 @@ from ..llm.model import get_qwen3
 from ..loop_detector.detector import detect_repeated_nodes
 from ..memory_analyzer.analyzer import analyze_memory
 from ..reasoning_analyzer.analyzer import analyze_execution_reasoning
+from ..recommendation.engine import generate_agent_recommendation
 from ..signals.event_publisher import publish_event
 from ..signals.event_schema import AgenticEvent
 from ..signals.failure_signals import detect_failure_signals
@@ -193,7 +194,8 @@ def execute_task(state: AgentState) -> AgentState:
 
     Tool execution is performed by LangGraph ToolNode.
     This node observes the resulting messages and runs
-    IntelliCore analysis and telemetry generation.
+    IntelliCore analysis, diagnosis, recommendations,
+    and telemetry generation.
     """
 
     task = state.get("task", "")
@@ -344,6 +346,12 @@ def execute_task(state: AgentState) -> AgentState:
         trace_analysis=trace_analysis,
     )
 
+    # Generate an actionable recommendation from the diagnosis.
+    recommendation = generate_agent_recommendation(
+        diagnosis=diagnosis,
+        failure_analysis=failure_analysis,
+    )
+
     # Measure the complete agent execution from the first LLM node
     # until final event creation.
     execution_start_time = state.get("execution_start_time")
@@ -386,6 +394,7 @@ def execute_task(state: AgentState) -> AgentState:
             "trace_analysis": trace_analysis,
             "failure_analysis": failure_analysis,
             "diagnosis": diagnosis,
+            "recommendation": recommendation,
             "telemetry_events": telemetry.events,
             "execution_latency_ms": execution_latency_ms,
         },
@@ -414,6 +423,7 @@ def execute_task(state: AgentState) -> AgentState:
         "event": event.model_dump(mode="json"),
         "failure_analysis": failure_analysis,
         "diagnosis": diagnosis,
+        "recommendation": recommendation,
         "messages": messages,
         "execution_start_time": execution_start_time,
     }
