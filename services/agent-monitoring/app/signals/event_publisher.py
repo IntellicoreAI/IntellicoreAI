@@ -3,7 +3,7 @@ import urllib.request
 from typing import Any
 
 
-EVENT_API_URL = "http://127.0.0.1:8000/events"
+EVENT_API_URL = "http://127.0.0.1:8001/events"
 
 
 def publish_event(event: dict[str, Any]) -> dict[str, Any]:
