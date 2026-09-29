@@ -1,16 +1,12 @@
 from fastapi import FastAPI
 
+from .repositories.event_repository import get_all_events, insert_event
 from .signals.event_schema import AgenticEvent
 
 app = FastAPI(
     title="IntelliCore Agent Monitoring Service",
     version="0.1.0",
 )
-
-
-# Temporary in-memory event store.
-# Database persistence will be added in a later step.
-events: list[AgenticEvent] = []
 
 
 @app.get("/health")
@@ -25,9 +21,9 @@ def health_check():
 
 @app.post("/events")
 def ingest_event(event: AgenticEvent):
-    """Receive and validate an Agentic telemetry event."""
+    """Receive, validate, and persist an Agentic telemetry event."""
 
-    events.append(event)
+    insert_event(event.model_dump(mode="json"))
 
     return {
         "status": "accepted",
@@ -37,9 +33,11 @@ def ingest_event(event: AgenticEvent):
 
 @app.get("/events")
 def get_events():
-    """Return all received Agentic telemetry events."""
+    """Return all persisted Agentic telemetry events."""
+
+    events = get_all_events()
 
     return {
         "count": len(events),
-        "events": [event.model_dump(mode="json") for event in events],
+        "events": events,
     }
