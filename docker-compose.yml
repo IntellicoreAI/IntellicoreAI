@@ -1,0 +1,36 @@
+﻿services:
+  ingestion-service:
+    build:
+      context: .
+      dockerfile: services/ingestion-service/Dockerfile
+    container_name: intellicore-ingestion
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  ml-monitoring:
+    build:
+      context: .
+      dockerfile: services/ml-monitoring/Dockerfile
+    container_name: intellicore-ml-monitoring
+    env_file:
+      - .env
+    environment:
+      INTELLICORE_INGESTION_URL: http://ingestion-service:8000/events
+    volumes:
+      - ./data:/workspace/data
+    depends_on:
+      ingestion-service:
+        condition: service_healthy

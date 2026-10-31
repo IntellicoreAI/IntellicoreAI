@@ -1,0 +1,16 @@
+[project]
+name = "intellicore-ingestion-service"
+version = "0.1.0"
+description = "Event ingestion service for IntelliCore OS"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "jsonschema",
+    "supabase>=2.33.0",
+    "python-dotenv",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

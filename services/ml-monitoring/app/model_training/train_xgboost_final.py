@@ -48,7 +48,7 @@ from sklearn.metrics import (
 # PATHS
 # ============================================================
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+PROJECT_ROOT = Path(__file__).resolve().parents[4]
 
 TRAIN_PATH = (
     PROJECT_ROOT
@@ -306,6 +306,12 @@ def create_confusion_matrix(
 ):
 
     print("\n[6] Creating confusion matrix...")
+
+    # Create artifact directory BEFORE saving the image
+    ARTIFACT_DIR.mkdir(
+        parents=True,
+        exist_ok=True
+    )
 
     cm = confusion_matrix(
         y_test,
