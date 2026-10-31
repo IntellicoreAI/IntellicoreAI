@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "IntelliCore Agentic Event",
+  "description": "Agentic AI telemetry event extending the common IntelliCore event contract.",
+  "allOf": [
+    {
+      "$ref": "./base-event.schema.json"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "system_type": {
+          "const": "AGENT"
+        },
+        "metadata": {
+          "type": "object",
+          "properties": {
+            "node": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tool": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tool_status": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tool_latency_ms": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "trajectory": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "tool_calls": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "tool_results": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "memory": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "reasoning": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "failure_signal": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": true
+        }
+      }
+    }
+  ]
+}

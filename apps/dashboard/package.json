@@ -1,0 +1,1 @@
+{"name":"intellicore-dashboard","version":"1.0.0","private":true,"dependencies":{"next":"^15.5.28","react":"^19.3.1","react-dom":"^19.3.1"},"scripts":{"dev":"next dev","build":"next build","start":"next start"},"devDependencies":{"@types/react":"19.3.0","typescript":"5.8.2"}}

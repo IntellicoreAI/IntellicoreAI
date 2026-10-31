@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python build artifacts
+*.egg-info/
+build/
+dist/
+
+# Environment files
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+# Next.js dashboard
+apps/dashboard/node_modules/
+apps/dashboard/.next/
+apps/dashboard/out/
+apps/dashboard/next-env.d.ts

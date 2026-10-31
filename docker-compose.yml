@@ -1,0 +1,17 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: intellicore-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: intellicore
+      POSTGRES_USER: intellicore
+      POSTGRES_PASSWORD: intellicore_dev
+    ports:
+      - "5433:5432"
+    volumes:
+      - intellicore_postgres_data:/var/lib/postgresql/data
+      - ./database/migrations/004_events.sql:/docker-entrypoint-initdb.d/004_events.sql:ro
+
+volumes:
+  intellicore_postgres_data:
