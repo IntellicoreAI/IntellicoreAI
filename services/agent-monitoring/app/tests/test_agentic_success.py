@@ -1,3 +1,4 @@
+
 import sys
 from pathlib import Path
 
@@ -7,7 +8,7 @@ SERVICE_ROOT = Path(__file__).resolve().parents[2]
 if str(SERVICE_ROOT) not in sys.path:
     sys.path.insert(0, str(SERVICE_ROOT))
 
-from app.execution_monitor.graph import execute_tools, execute_task
+from app.execution_monitor import graph
 
 
 def build_success_state():
@@ -40,12 +41,30 @@ def build_success_state():
     }
 
 
-def test_agentic_success_execution():
+def test_agentic_success_execution(monkeypatch):
     """Verify successful tool execution produces a completed event."""
+
+    # Mock the native Agent Monitoring API publisher.
+    monkeypatch.setattr(
+        graph,
+        "publish_event",
+        lambda event: {"status": "success"},
+    )
+
+    # Mock the central ingestion API publisher.
+    monkeypatch.setattr(
+        graph,
+        "publish_central_event",
+        lambda payload: {
+            "status_code": 200,
+            "response": "{}",
+        },
+    )
+
     state = build_success_state()
 
-    state = execute_tools(state)
-    state = execute_task(state)
+    state = graph.execute_tools(state)
+    state = graph.execute_task(state)
 
     assert state["status"] == "completed"
 

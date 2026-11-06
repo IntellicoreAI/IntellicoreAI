@@ -1,3 +1,4 @@
+
 import sys
 from pathlib import Path
 
@@ -6,10 +7,29 @@ SERVICE_ROOT = Path(__file__).resolve().parents[2]
 if str(SERVICE_ROOT) not in sys.path:
     sys.path.insert(0, str(SERVICE_ROOT))
 
-from app.execution_monitor.graph import execute_task
+from app.execution_monitor import graph
 
 
-def test_execute_task_generates_recommendation():
+def test_execute_task_generates_recommendation(monkeypatch):
+    # Mock the native event publisher so the test does not
+    # require the Agent Monitoring API on port 8001.
+    monkeypatch.setattr(
+        graph,
+        "publish_event",
+        lambda event: {"status": "success"},
+    )
+
+    # Mock central ingestion so the test does not require
+    # the central API on port 8000.
+    monkeypatch.setattr(
+        graph,
+        "publish_central_event",
+        lambda payload: {
+            "status_code": 200,
+            "response": "{}",
+        },
+    )
+
     state = {
         "task": "Check transaction status",
         "messages": [],
@@ -42,7 +62,7 @@ def test_execute_task_generates_recommendation():
         "execution_start_time": None,
     }
 
-    result = execute_task(state)
+    result = graph.execute_task(state)
 
     assert result["failure_analysis"]["failure_detected"] is True
     assert result["diagnosis"]["diagnosis_detected"] is True

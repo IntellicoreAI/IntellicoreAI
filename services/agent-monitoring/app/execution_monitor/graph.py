@@ -1,3 +1,5 @@
+
+import logging
 import time
 import uuid
 
@@ -12,6 +14,10 @@ from ..loop_detector.detector import detect_repeated_nodes
 from ..memory_analyzer.analyzer import analyze_memory
 from ..reasoning_analyzer.analyzer import analyze_execution_reasoning
 from ..recommendation.engine import generate_agent_recommendation
+from ..signals.central_adapter import (
+    normalize_agentic_event,
+    publish_central_event,
+)
 from ..signals.event_publisher import publish_event
 from ..signals.event_schema import AgenticEvent
 from ..signals.failure_signals import detect_failure_signals
@@ -20,10 +26,12 @@ from ..trace_analyzer.analyzer import analyze_trace
 from .state import AgentState
 
 
+logger = logging.getLogger(__name__)
+
+
 def agent_llm(state: AgentState) -> AgentState:
     """Run the real local Qwen3 agent model."""
 
-    # Start the overall agent execution timer on the first LLM node.
     execution_start_time = state.get("execution_start_time")
 
     if execution_start_time is None:
@@ -51,7 +59,7 @@ def agent_llm(state: AgentState) -> AgentState:
 
 
 def route_after_llm(state: AgentState) -> str:
-    """Route the agent based on Qwen3's response."""
+    """Route the agent according to Qwen3's response."""
 
     messages = state.get("messages", [])
 
@@ -66,63 +74,72 @@ def route_after_llm(state: AgentState) -> str:
     return "execute"
 
 
+def route_after_tools(state: AgentState) -> str:
+    """Stop tool execution when a loop or the execution limit is reached."""
+
+    trajectory = state.get("trajectory", [])
+    tool_execution_count = state.get("tool_execution_count", 0)
+    max_attempts = max(1, state.get("max_attempts", 3))
+
+    loop_analysis = detect_repeated_nodes(trajectory)
+
+    if loop_analysis.get("loop_detected"):
+        return "execute"
+
+    if tool_execution_count >= max_attempts:
+        return "execute"
+
+    return "agent_llm"
+
+
 def execute_tools(state: AgentState) -> AgentState:
     """
-    Execute the real LangGraph ToolNode with IntelliCore telemetry.
+    Execute the LangGraph ToolNode and capture IntelliCore telemetry.
 
-    ToolNode converts tool exceptions into ToolMessage error results.
-    IntelliCore inspects those results and records the tool execution
-    as failed without executing the tool twice.
+    ToolNode may convert tool exceptions into ToolMessage error results.
+    Those results are inspected without executing a tool twice.
     """
 
     trace_id = state.get("trace_id") or str(uuid.uuid4())
-
     telemetry = AgentTelemetry(trace_id=trace_id)
-
     tool_node = ToolNode([check_transaction_status])
 
     tool_span = telemetry.start_span("tool_node")
 
     try:
         result = tool_node.invoke(state)
-
-    except Exception as exc:
-        result = {"messages": []}
-
-        tool_status = "failed"
-        tool_error = str(exc)
-
-    else:
         tool_status = "completed"
         tool_error = None
 
-        # ToolNode normally converts tool exceptions into ToolMessage
-        # objects instead of raising them. Inspect the returned messages.
-        for message in result.get("messages", []):
-            message_status = getattr(message, "status", None)
+    except Exception as exc:
+        result = {"messages": []}
+        tool_status = "failed"
+        tool_error = str(exc)
 
-            if message_status == "error":
-                tool_status = "failed"
-                tool_error = str(getattr(message, "content", ""))
+    messages = result.get("messages", [])
 
-                break
+    # Inspect actual ToolMessage results.
+    for message in messages:
+        if (
+            message.__class__.__name__ == "ToolMessage"
+            and getattr(message, "status", None) == "error"
+        ):
+            tool_status = "failed"
+            tool_error = str(getattr(message, "content", ""))
+            break
 
     tool_event = telemetry.end_span(
         tool_span,
         status=tool_status,
         error=tool_error,
-        metadata={
-            "node": "tool_node",
-        },
+        metadata={"node": "tool_node"},
     )
-
-    messages = result.get("messages", [])
 
     tool_name = "unknown_tool"
     tool_call_id = None
     tool_output = None
 
-    # Identify the actual tool call requested by Qwen3.
+    # Identify the requested tool call.
     for message in reversed(state.get("messages", [])):
         tool_calls = getattr(message, "tool_calls", [])
 
@@ -130,10 +147,9 @@ def execute_tools(state: AgentState) -> AgentState:
             tool_call = tool_calls[0]
             tool_name = tool_call.get("name", "unknown_tool")
             tool_call_id = tool_call.get("id")
-
             break
 
-    # Identify the actual ToolNode result.
+    # Identify the corresponding tool result.
     for message in reversed(messages):
         if message.__class__.__name__ == "ToolMessage":
             tool_output = message.content
@@ -179,10 +195,25 @@ def execute_tools(state: AgentState) -> AgentState:
         }
     )
 
-    # Preserve telemetry collected by previous nodes and append
-    # the current tool telemetry event.
     telemetry_events = state.get("telemetry_events", []).copy()
     telemetry_events.append(tool_event)
+
+    tool_execution_count = (
+        state.get("tool_execution_count", 0) + 1
+    )
+
+    max_attempts = max(1, state.get("max_attempts", 3))
+    loop_analysis = detect_repeated_nodes(trajectory)
+
+    execution_stop_reason = state.get("execution_stop_reason")
+
+    if loop_analysis.get("loop_detected"):
+        execution_stop_reason = "Agentic loop detected."
+
+    elif tool_execution_count >= max_attempts:
+        execution_stop_reason = (
+            "Maximum tool execution limit reached."
+        )
 
     return {
         "messages": messages,
@@ -192,17 +223,17 @@ def execute_tools(state: AgentState) -> AgentState:
         "trace_id": trace_id,
         "current_node": "tool_node",
         "execution_start_time": state.get("execution_start_time"),
+        "tool_execution_count": tool_execution_count,
+        "execution_stop_reason": execution_stop_reason,
     }
 
 
 def execute_task(state: AgentState) -> AgentState:
     """
-    Finalize the real agent execution.
+    Finalize execution and run IntelliCore analyses.
 
-    Tool execution is performed by LangGraph ToolNode.
-    This node observes the resulting messages and runs
-    IntelliCore analysis, diagnosis, recommendations,
-    analytics, and telemetry generation.
+    This node records the result, telemetry, diagnosis,
+    recommendations, analytics, and final Agentic event.
     """
 
     task = state.get("task", "")
@@ -214,55 +245,53 @@ def execute_task(state: AgentState) -> AgentState:
     messages = state.get("messages", [])
 
     trace_id = state.get("trace_id") or str(uuid.uuid4())
-
     telemetry = AgentTelemetry(trace_id=trace_id)
 
     attempt_count = state.get("attempt_count", 0) + 1
-    max_attempts = state.get("max_attempts", 3)
+    max_attempts = max(1, state.get("max_attempts", 3))
 
     node_span = telemetry.start_span("execute_task")
 
     result = None
 
-    # Observe the real ToolNode result.
+    # Record the latest ToolMessage and its corresponding tool call.
     for message in reversed(messages):
         if message.__class__.__name__ == "ToolMessage":
             result = message.content
-
             tool_name = getattr(message, "name", None) or "unknown_tool"
             tool_call_id = getattr(message, "tool_call_id", None)
 
-            # Add the Qwen3 tool call to the observable trajectory.
             for previous_message in reversed(messages):
-                tool_message_calls = getattr(
+                message_tool_calls = getattr(
                     previous_message,
                     "tool_calls",
                     [],
                 )
 
-                if tool_message_calls:
-                    tool_call = tool_message_calls[0]
+                matching_call = next(
+                    (
+                        call
+                        for call in message_tool_calls
+                        if call.get("id") == tool_call_id
+                    ),
+                    None,
+                )
 
+                if matching_call is not None:
                     tool_calls.append(
                         {
-                            "tool": tool_call.get(
-                                "name",
-                                tool_name,
+                            "tool": matching_call.get(
+                                "name", tool_name
                             ),
-                            "input": tool_call.get(
-                                "args",
-                                {},
-                            ),
+                            "input": matching_call.get("args", {}),
                             "trace_id": trace_id,
                             "span_id": tool_call_id,
                         }
                     )
-
                     break
 
             break
 
-    # Determine whether any observed tool execution failed.
     failed_tool_results = [
         tool_result
         for tool_result in tool_results
@@ -270,9 +299,7 @@ def execute_task(state: AgentState) -> AgentState:
     ]
 
     tool_status = (
-        "failed"
-        if failed_tool_results
-        else "completed"
+        "failed" if failed_tool_results else "completed"
     )
 
     tool_error = (
@@ -281,14 +308,25 @@ def execute_task(state: AgentState) -> AgentState:
         else None
     )
 
-    # If no ToolMessage exists, the agent completed without a tool.
-    last_message = messages[-1] if messages else None
+    # A safety stop is a failed/incomplete execution, not a success.
+    stop_reason = state.get("execution_stop_reason")
 
-    if last_message is not None:
-        final_content = getattr(last_message, "content", None)
+    if stop_reason:
+        tool_status = "failed"
+        tool_error = stop_reason
 
-        if final_content:
-            result = final_content
+    # Prefer the final assistant response when available.
+    if messages:
+        last_message = messages[-1]
+
+        if last_message.__class__.__name__ != "ToolMessage":
+            final_content = getattr(last_message, "content", None)
+
+            if final_content:
+                result = final_content
+
+        elif result is None:
+            result = getattr(last_message, "content", None)
 
     trajectory.append(
         {
@@ -311,8 +349,6 @@ def execute_task(state: AgentState) -> AgentState:
         },
     )
 
-    # Preserve the final execute_task telemetry event together
-    # with telemetry collected by the tool node.
     telemetry_events.append(node_event)
 
     loop_analysis = detect_repeated_nodes(trajectory)
@@ -332,7 +368,6 @@ def execute_task(state: AgentState) -> AgentState:
         tool_results=tool_results,
     )
 
-    # Use actual measured tool latency when available.
     tool_latency_ms = None
 
     if tool_results:
@@ -348,7 +383,6 @@ def execute_task(state: AgentState) -> AgentState:
         ),
     )
 
-    # Diagnose the execution using observable evidence.
     diagnosis = diagnose_agent_execution(
         failure_analysis=failure_analysis,
         tool_results=tool_results,
@@ -358,14 +392,11 @@ def execute_task(state: AgentState) -> AgentState:
         trace_analysis=trace_analysis,
     )
 
-    # Generate an actionable recommendation from the diagnosis.
     recommendation = generate_agent_recommendation(
         diagnosis=diagnosis,
         failure_analysis=failure_analysis,
     )
 
-    # Measure the complete agent execution from the first LLM node
-    # until final event creation.
     execution_start_time = state.get("execution_start_time")
 
     if execution_start_time is None:
@@ -375,8 +406,6 @@ def execute_task(state: AgentState) -> AgentState:
         time.perf_counter() - execution_start_time
     ) * 1000
 
-    # Calculate aggregated Agentic execution metrics from the
-    # complete trajectory, tool activity, and telemetry.
     analytics = calculate_agent_metrics(
         trajectory=trajectory,
         tool_calls=tool_calls,
@@ -392,21 +421,19 @@ def execute_task(state: AgentState) -> AgentState:
         trace_id=trace_id,
         span_id=node_event["span_id"],
         event_type="agent_execution",
-        input={
-            "task": task,
-        },
+        input={"task": task},
         output=result,
-
-        # Common IntelliCore event latency represents
-        # the complete agent execution in milliseconds.
         latency=execution_latency_ms,
-
         status=tool_status,
         error=tool_error,
         metadata={
             "node": "execute_task",
             "attempt_count": attempt_count,
             "max_attempts": max_attempts,
+            "tool_execution_count": state.get(
+                "tool_execution_count", 0
+            ),
+            "execution_stop_reason": stop_reason,
             "trajectory": trajectory,
             "tool_calls": tool_calls,
             "tool_results": tool_results,
@@ -423,10 +450,50 @@ def execute_task(state: AgentState) -> AgentState:
         },
     )
 
-    # Publish the validated Agentic event to the IntelliCore API.
-    publish_result = publish_event(
-        event.model_dump(mode="json")
-    )
+    # Preserve existing native Agentic AI event publishing.
+    event_payload = event.model_dump(mode="json")
+    publish_result = publish_event(event_payload)
+
+    # Forward the monitoring result to central ingestion.
+    try:
+        monitoring_payload = normalize_agentic_event(
+            event_payload,
+            event_type="monitoring_result",
+        )
+
+        publish_central_event(monitoring_payload)
+
+        logger.info(
+            "Agentic monitoring event forwarded: %s",
+            event.event_id,
+        )
+
+    except Exception:
+        logger.exception(
+            "Failed to forward Agentic monitoring event: %s",
+            event.event_id,
+        )
+
+    # Forward an alert when existing failure detection identifies one.
+    if failure_analysis.get("failure_detected", False):
+        try:
+            alert_payload = normalize_agentic_event(
+                event_payload,
+                event_type="alert",
+            )
+
+            publish_central_event(alert_payload)
+
+            logger.warning(
+                "Agentic alert forwarded: %s",
+                alert_payload["event_id"],
+            )
+
+        except Exception:
+            logger.exception(
+                "Failed to forward Agentic alert: %s",
+                event.event_id,
+            )
 
     return {
         "current_node": "execute_task",
@@ -443,6 +510,10 @@ def execute_task(state: AgentState) -> AgentState:
         "span_id": node_event["span_id"],
         "attempt_count": attempt_count,
         "max_attempts": max_attempts,
+        "tool_execution_count": state.get(
+            "tool_execution_count", 0
+        ),
+        "execution_stop_reason": stop_reason,
         "loop_analysis": loop_analysis,
         "event": event.model_dump(mode="json"),
         "failure_analysis": failure_analysis,
@@ -457,13 +528,18 @@ def execute_task(state: AgentState) -> AgentState:
 def should_continue(state: AgentState) -> str:
     """Decide whether the agent should continue or finish."""
 
+    if state.get("execution_stop_reason"):
+        return "end"
+
     if state.get("loop_analysis", {}).get("loop_detected"):
         return "end"
 
     if state.get("status") == "completed":
         return "end"
 
-    if state.get("attempt_count", 0) >= state.get("max_attempts", 3):
+    if state.get("attempt_count", 0) >= max(
+        1, state.get("max_attempts", 3)
+    ):
         return "end"
 
     return "retry"
@@ -490,7 +566,15 @@ def build_agent_graph():
         },
     )
 
-    graph.add_edge("tool_node", "agent_llm")
+    # Bound the tool loop rather than returning to the LLM indefinitely.
+    graph.add_conditional_edges(
+        "tool_node",
+        route_after_tools,
+        {
+            "agent_llm": "agent_llm",
+            "execute": "execute_task",
+        },
+    )
 
     graph.add_edge("execute_task", END)
 
