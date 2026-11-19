@@ -1,4 +1,4 @@
-```python
+
 """Tests for the Agentic AI central event adapter."""
 
 import sys
@@ -6,11 +6,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID
 
+import pytest
+
 SERVICE_ROOT = Path(__file__).resolve().parents[2]
 if str(SERVICE_ROOT) not in sys.path:
     sys.path.insert(0, str(SERVICE_ROOT))
-
-import pytest
 
 from app.signals.central_adapter import (
     normalize_agentic_event,
@@ -131,4 +131,3 @@ def test_invalid_timestamp_is_rejected():
 def test_non_dictionary_event_is_rejected():
     with pytest.raises(ValueError, match="Event must be a dictionary"):
         normalize_agentic_event(None)
-```
