@@ -7,10 +7,10 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
-import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from app.adapters.ml_adapter import create_ml_event
 
 from app.monitoring.alert_engine import (
     DATA_QUALITY_REPORT_PATH,
@@ -35,21 +35,29 @@ INGESTION_URL = os.getenv(
     "INTELLICORE_INGESTION_URL",
     "http://127.0.0.1:8000/events",
 )
+
 PROJECT_ID = os.getenv(
     "INTELLICORE_PROJECT_ID",
     "intellicore-credit-risk",
 )
+
 ENVIRONMENT = os.getenv("INTELLICORE_ENVIRONMENT", "development")
 HTTP_TIMEOUT_SECONDS = 15
+
 TELEMETRY_PATH = (
     PROJECT_ROOT / "data" / "telemetry" / "supabase_prediction_events.jsonl"
 )
+
 SYNC_SCRIPT = PROJECT_ROOT / "sync_supabase_telemetry.py"
 
 
+# ============================================================
+# MONITORING DETECTORS
+# ============================================================
 
 # Run order: data quality, feature drift, prediction drift,
 # and controlled performance degradation evaluation.
+
 MONITORING_DETECTORS = [
     ("Data quality", "app.data_quality.data_quality_monitor"),
     ("Data drift", "app.monitoring.drift_detector"),
@@ -68,10 +76,12 @@ MONITORING_DETECTORS = [
 def sync_supabase_telemetry() -> None:
     """Refresh the generated JSONL file from persisted prediction events."""
 
-    print("\\nSyncing prediction telemetry from Supabase...")
+    print("\nSyncing prediction telemetry from Supabase...")
 
     if not SYNC_SCRIPT.exists():
-        raise FileNotFoundError(f"Telemetry sync script not found: {SYNC_SCRIPT}")
+        raise FileNotFoundError(
+            f"Telemetry sync script not found: {SYNC_SCRIPT}"
+        )
 
     subprocess.run(
         [sys.executable, str(SYNC_SCRIPT)],
@@ -95,7 +105,7 @@ def sync_supabase_telemetry() -> None:
 # ============================================================
 
 def run_monitoring_detectors() -> None:
-    """Generate fresh reports before publishing any monitoring events."""
+    """Generate fresh reports before publishing monitoring events."""
 
     print("\n" + "=" * 70)
     print("INTELLICORE OS - MONITORING PIPELINE")
@@ -163,47 +173,6 @@ def get_model(config: dict[str, Any]) -> dict[str, str]:
 
 
 # ============================================================
-# EVENT CREATION
-# ============================================================
-
-def build_event(
-    *,
-    event_type: str,
-    signal_type: str,
-    report: dict[str, Any],
-    model: dict[str, str],
-) -> dict[str, Any]:
-    """Wrap a monitoring artifact in the base-event envelope."""
-
-    if event_type not in {"monitoring_result", "alert"}:
-        raise ValueError(f"Unsupported event type: {event_type}")
-
-    if ENVIRONMENT not in {"development", "staging", "production"}:
-        raise ValueError(
-            "INTELLICORE_ENVIRONMENT must be development, staging, "
-            "or production."
-        )
-
-    event_data: dict[str, Any] = {"signal_type": signal_type}
-
-    if event_type == "alert":
-        event_data["alert"] = report
-    else:
-        event_data["report"] = report
-
-    return {
-        "schema_version": "1.0",
-        "event_id": str(uuid.uuid4()),
-        "event_type": event_type,
-        "occurred_at": datetime.now(timezone.utc).isoformat(),
-        "project_id": PROJECT_ID,
-        "environment": ENVIRONMENT,
-        "model": model,
-        "data": event_data,
-    }
-
-
-# ============================================================
 # INGESTION API
 # ============================================================
 
@@ -233,6 +202,7 @@ def publish_event(event: dict[str, Any]) -> dict[str, Any]:
             "utf-8",
             errors="replace",
         )
+
         raise RuntimeError(
             f"Ingestion API returned HTTP {exc.code}: {error_body}"
         ) from exc
@@ -302,27 +272,34 @@ def run_publishing_workflow() -> list[dict[str, Any]]:
     alert = generate_unified_alert()
     save_unified_alert(alert)
 
+    # Convert all four monitoring reports using the ML adapter.
     events = [
-        build_event(
+        create_ml_event(
             event_type="monitoring_result",
             signal_type=signal_type,
             report=report,
             model=model,
+            project_id=PROJECT_ID,
+            environment=ENVIRONMENT,
         )
         for signal_type, report in loaded_reports
     ]
 
+    # Convert the unified alert using the same adapter.
     events.append(
-        build_event(
+        create_ml_event(
             event_type="alert",
             signal_type="unified_alert",
             report=alert,
             model=model,
+            project_id=PROJECT_ID,
+            environment=ENVIRONMENT,
         )
     )
 
     results = []
 
+    # Publish all five events to the central ingestion service.
     for index, event in enumerate(events, start=1):
         response = publish_event(event)
         results.append(response)
