@@ -1,3 +1,4 @@
+
 from typing import Any, Annotated, TypedDict
 
 from langgraph.graph.message import add_messages
@@ -35,8 +36,11 @@ class AgentState(TypedDict, total=False):
     span_id: str
     execution_start_time: float
 
+    # Execution limits and safety controls.
     attempt_count: int
     max_attempts: int
+    tool_execution_count: int
+    execution_stop_reason: str
 
     loop_analysis: dict[str, Any]
     failure_analysis: dict[str, Any]

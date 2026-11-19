@@ -1,12 +1,10 @@
-from langchain_ollama import ChatOllama
+﻿from langchain_ollama import ChatOllama
 
-
-QWEN3_MODEL = "qwen3:8b"
+QWEN3_MODEL = "qwen3:1.7b"
 
 
 def get_qwen3():
     """Return the local Qwen3 model used by the Agentic runtime."""
-
     return ChatOllama(
         model=QWEN3_MODEL,
         temperature=0,

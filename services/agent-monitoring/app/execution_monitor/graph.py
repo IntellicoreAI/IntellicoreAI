@@ -1,4 +1,4 @@
-
+﻿
 import logging
 import time
 import uuid
@@ -417,7 +417,7 @@ def execute_task(state: AgentState) -> AgentState:
     event = AgenticEvent(
         event_id=str(uuid.uuid4()),
         project_id="intellicore-agentic",
-        model_id="qwen3:8b",
+        model_id="qwen3:1.7b",
         trace_id=trace_id,
         span_id=node_event["span_id"],
         event_type="agent_execution",
@@ -582,3 +582,4 @@ def build_agent_graph():
 
 
 agent_graph = build_agent_graph()
+

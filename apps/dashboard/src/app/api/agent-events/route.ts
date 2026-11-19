@@ -1,25 +1,56 @@
 ﻿import { NextResponse } from "next/server";
 
+const API_URL =
+  process.env.AGENT_MONITORING_API_URL || "http://127.0.0.1:8001";
+
 export async function GET() {
   try {
-    const response = await fetch("http://127.0.0.1:8001/events", {
+    const response = await fetch(`${API_URL}/events`, {
       cache: "no-store",
     });
 
-    if (!response.ok) {
+    const raw = await response.text();
+    let data: any;
+
+    try {
+      data = raw ? JSON.parse(raw) : [];
+    } catch {
       return NextResponse.json(
-        { error: "Agentic API is unavailable", count: 0, events: [] },
+        { error: "Agent Monitoring returned an invalid response." },
         { status: 502 }
       );
     }
 
-    const data = await response.json();
-    return NextResponse.json(data, {
-      headers: { "Cache-Control": "no-store" },
-    });
-  } catch {
+    if (!response.ok) {
+      return NextResponse.json(
+        {
+          error:
+            data?.detail ||
+            data?.error ||
+            "Could not load agent events.",
+        },
+        { status: response.status }
+      );
+    }
+
+    const events = Array.isArray(data)
+      ? data
+      : Array.isArray(data?.events)
+        ? data.events
+        : [];
+
     return NextResponse.json(
-      { error: "Could not connect to Agentic API", count: 0, events: [] },
+      { count: events.length, events },
+      { headers: { "Cache-Control": "no-store" } }
+    );
+  } catch (error) {
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "Agent Monitoring service is unavailable.",
+      },
       { status: 502 }
     );
   }

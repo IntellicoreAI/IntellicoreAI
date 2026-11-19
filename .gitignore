@@ -29,3 +29,6 @@ apps/dashboard/node_modules/
 apps/dashboard/.next/
 apps/dashboard/out/
 apps/dashboard/next-env.d.ts
+
+# Local safety backups
+services/agent-monitoring/app/main.py.backup

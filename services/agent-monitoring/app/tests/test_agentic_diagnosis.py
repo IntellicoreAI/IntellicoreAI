@@ -1,5 +1,7 @@
+
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 from langchain_core.messages import AIMessage
 
@@ -45,7 +47,13 @@ def test_agentic_failure_diagnosis():
     state = build_failure_state()
 
     state = execute_tools(state)
-    state = execute_task(state)
+
+    # Keep this unit test independent of the live IntelliCore API.
+    with patch(
+        "app.execution_monitor.graph.publish_event",
+        return_value={"status": "success"},
+    ):
+        state = execute_task(state)
 
     assert state["status"] == "failed"
 
