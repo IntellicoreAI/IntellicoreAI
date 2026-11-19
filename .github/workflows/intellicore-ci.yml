@@ -41,12 +41,13 @@ jobs:
 
       - name: Run general Python tests
         run: |
+          set +e
           pytest -v \
             --ignore=services/ingestion-service/tests \
             --ignore=services/agent-monitoring/app/tests \
             --ignore=services/agent-monitoring/app/llm/tool_test.py
-
           test_status=$?
+          set -e
 
           if [ "$test_status" -eq 5 ]; then
             echo "No general Python tests collected. Service tests run in dedicated jobs."
