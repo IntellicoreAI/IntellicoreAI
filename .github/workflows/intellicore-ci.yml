@@ -41,16 +41,18 @@ jobs:
 
       - name: Run general Python tests
         run: |
-          if find . -type f -name "test_*.py" \
-            -not -path "./.git/*" \
-            -not -path "./services/ingestion-service/tests/*" \
-            -not -path "./services/agent-monitoring/app/tests/*" | grep -q .; then
-            pytest -v \
-              --ignore=services/ingestion-service/tests \
-              --ignore=services/agent-monitoring/app/tests \
-              --ignore=services/agent-monitoring/app/llm/tool_test.py
-          else
-            echo "No additional general Python tests found. Service tests run separately."
+          pytest -v \
+            --ignore=services/ingestion-service/tests \
+            --ignore=services/agent-monitoring/app/tests \
+            --ignore=services/agent-monitoring/app/llm/tool_test.py
+
+          test_status=$?
+
+          if [ "$test_status" -eq 5 ]; then
+            echo "No general Python tests collected. Service tests run in dedicated jobs."
+            exit 0
+          elif [ "$test_status" -ne 0 ]; then
+            exit "$test_status"
           fi
 
   ingestion-service-tests:
