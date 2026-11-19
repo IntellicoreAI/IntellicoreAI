@@ -22,7 +22,6 @@ MAX_RETRIES = 3
 
 def normalize_timestamp(value: Any) -> str:
     """Convert timestamp into UTC ISO-8601 format."""
-
     if value is None:
         raise ValueError("Timestamp is required")
 
@@ -36,9 +35,7 @@ def normalize_timestamp(value: Any) -> str:
         except ValueError as exc:
             raise ValueError("Invalid timestamp format") from exc
     else:
-        raise ValueError(
-            "Timestamp must be a datetime or string"
-        )
+        raise ValueError("Timestamp must be a datetime or string")
 
     if timestamp.tzinfo is None:
         timestamp = timestamp.replace(tzinfo=timezone.utc)
@@ -52,16 +49,13 @@ def normalize_timestamp(value: Any) -> str:
 
 def normalize_event_id(value: Any, event_type: str) -> str:
     """Validate UUID and generate a stable alert UUID."""
-
     if not value:
         raise ValueError("Event ID is required")
 
     try:
         source_uuid = UUID(str(value))
     except (ValueError, TypeError, AttributeError) as exc:
-        raise ValueError(
-            "Event ID must be a valid UUID"
-        ) from exc
+        raise ValueError("Event ID must be a valid UUID") from exc
 
     if event_type == "monitoring_result":
         return str(source_uuid)
@@ -79,23 +73,18 @@ def normalize_agentic_event(
     event_type: str = "monitoring_result",
 ) -> dict[str, Any]:
     """Convert a native Agentic event into the common event envelope."""
-
     if not isinstance(event, dict):
         raise ValueError("Event must be a dictionary")
 
     if event_type not in ("monitoring_result", "alert"):
-        raise ValueError(
-            f"Unsupported event type: {event_type}"
-        )
+        raise ValueError(f"Unsupported event type: {event_type}")
 
     event_id = normalize_event_id(
         event.get("event_id"),
         event_type,
     )
 
-    timestamp = normalize_timestamp(
-        event.get("timestamp")
-    )
+    timestamp = normalize_timestamp(event.get("timestamp"))
 
     metadata = event.get("metadata") or {}
 
@@ -138,7 +127,6 @@ def publish_central_event(
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     """Forward a normalized event to central ingestion with retries."""
-
     body = json.dumps(payload).encode("utf-8")
 
     request = urllib.request.Request(
@@ -154,7 +142,6 @@ def publish_central_event(
                 request,
                 timeout=TIMEOUT_SECONDS,
             ) as response:
-
                 response_body = response.read().decode("utf-8")
 
                 logger.info(
@@ -168,7 +155,6 @@ def publish_central_event(
                 }
 
         except urllib.error.HTTPError as exc:
-            # Retry rate limits, request timeouts and server errors.
             if exc.code not in (408, 429) and not (
                 500 <= exc.code <= 599
             ):
@@ -204,4 +190,3 @@ def publish_central_event(
     raise RuntimeError(
         "Central ingestion failed after all retry attempts"
     )
-
