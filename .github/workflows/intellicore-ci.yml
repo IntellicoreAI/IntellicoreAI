@@ -1,4 +1,3 @@
-```yaml
 name: IntelliCore CI
 
 on:
@@ -182,4 +181,3 @@ jobs:
             exit 1
           fi
           echo "All CI jobs passed."
-```
