@@ -1,5 +1,4 @@
 
-
 name: IntelliCore CI
 
 on:
@@ -40,14 +39,18 @@ jobs:
       - name: Run Ruff
         run: ruff check . --select E4,E7,E9,F --ignore E402,F841
 
-      - name: Run Python tests
+      - name: Run general Python tests
         run: |
           if find . -type f -name "test_*.py" \
             -not -path "./.git/*" \
-            -not -path "./services/ingestion-service/tests/*" | grep -q .; then
-            pytest -v --ignore=services/ingestion-service/tests
+            -not -path "./services/ingestion-service/tests/*" \
+            -not -path "./services/agent-monitoring/app/tests/*" | grep -q .; then
+            pytest -v \
+              --ignore=services/ingestion-service/tests \
+              --ignore=services/agent-monitoring/app/tests \
+              --ignore=services/agent-monitoring/app/llm/tool_test.py
           else
-            echo "No additional Python tests found. Ingestion tests run separately."
+            echo "No additional general Python tests found. Service tests run separately."
           fi
 
   ingestion-service-tests:
@@ -74,6 +77,31 @@ jobs:
 
       - name: Run ingestion tests
         run: pytest -v tests/
+
+  agent-monitoring-tests:
+    name: Agent Monitoring Tests
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: services/agent-monitoring
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run agent monitoring tests
+        run: pytest -v app/tests/
 
   frontend-checks:
     name: Frontend Checks
@@ -178,6 +206,7 @@ jobs:
     needs:
       - python-checks
       - ingestion-service-tests
+      - agent-monitoring-tests
       - frontend-checks
       - tauri-rust-checks
       - docker-validation
@@ -190,6 +219,7 @@ jobs:
         run: |
           if [ "${{ needs.python-checks.result }}" != "success" ] ||
              [ "${{ needs.ingestion-service-tests.result }}" != "success" ] ||
+             [ "${{ needs.agent-monitoring-tests.result }}" != "success" ] ||
              [ "${{ needs.frontend-checks.result }}" != "success" ] ||
              [ "${{ needs.tauri-rust-checks.result }}" != "success" ] ||
              [ "${{ needs.docker-validation.result }}" != "success" ] ||
