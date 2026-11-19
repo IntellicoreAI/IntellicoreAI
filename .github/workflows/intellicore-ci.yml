@@ -1,4 +1,4 @@
-
+```yaml
 name: IntelliCore CI
 
 on:
@@ -36,7 +36,7 @@ jobs:
         id: python-project
         shell: bash
         run: |
-          if [ -f "requirements.txt" ] || [ -f "pyproject.toml" ] || find . -name "*.py" -not -path "./.git/*" | grep -q .; then
+          if [ -f "requirements.txt" ] || find . -name "*.py" -not -path "./.git/*" | grep -q .; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
@@ -57,10 +57,6 @@ jobs:
 
           if [ -f "requirements.txt" ]; then
             pip install -r requirements.txt
-          fi
-
-          if [ -f "pyproject.toml" ]; then
-            pip install -e .
           fi
 
           pip install ruff pytest
@@ -118,6 +114,10 @@ jobs:
     name: Frontend Checks
     runs-on: ubuntu-latest
 
+    defaults:
+      run:
+        working-directory: apps/dashboard
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -126,11 +126,11 @@ jobs:
         id: frontend-project
         shell: bash
         run: |
-          if find . -name "package.json" -not -path "./.git/*" | grep -q .; then
+          if [ -f "package.json" ]; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "No frontend project detected. Frontend checks will be skipped."
+            echo "No dashboard package.json found. Frontend checks will be skipped."
           fi
 
       - name: Set up Node.js
@@ -138,31 +138,31 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/dashboard/package-lock.json
 
       - name: Install frontend dependencies
         if: steps.frontend-project.outputs.exists == 'true'
-        shell: bash
         run: |
-          cd "$(dirname "$(find . -name package.json -not -path './.git/*' | head -1)")"
-
           if [ -f "package-lock.json" ]; then
             npm ci
           else
             npm install
           fi
 
+      - name: Install missing TypeScript definitions
+        if: steps.frontend-project.outputs.exists == 'true'
+        run: |
+          npm install --no-save @types/node@20.17.6
+
       - name: Run frontend lint
         if: steps.frontend-project.outputs.exists == 'true'
-        shell: bash
         run: |
-          cd "$(dirname "$(find . -name package.json -not -path './.git/*' | head -1)")"
           npm run lint --if-present
 
       - name: Build frontend
         if: steps.frontend-project.outputs.exists == 'true'
-        shell: bash
         run: |
-          cd "$(dirname "$(find . -name package.json -not -path './.git/*' | head -1)")"
           npm run build --if-present
 
 
@@ -219,26 +219,32 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Check for Dockerfile
+      - name: Check for non-empty Dockerfiles
         id: docker-project
         shell: bash
         run: |
-          if find . -name "Dockerfile" -not -path "./.git/*" | grep -q .; then
+          if find . -type f -name "Dockerfile" \
+            -not -path "./.git/*" -size +0c | grep -q .; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "No Dockerfile detected. Docker validation will be skipped."
+            echo "No non-empty Dockerfiles found. Docker validation will be skipped."
           fi
 
       - name: Set up Docker Buildx
         if: steps.docker-project.outputs.exists == 'true'
         uses: docker/setup-buildx-action@v3
 
-      - name: Validate Docker build
+      - name: Validate Dockerfiles
         if: steps.docker-project.outputs.exists == 'true'
         shell: bash
         run: |
-          docker build --check .
+          while IFS= read -r dockerfile; do
+            context="$(dirname "$dockerfile")"
+            echo "Validating: $dockerfile"
+            docker build --check -f "$dockerfile" "$context"
+          done < <(find . -type f -name "Dockerfile" \
+            -not -path "./.git/*" -size +0c)
 
 
   # ============================================================
@@ -293,3 +299,4 @@ jobs:
           fi
 
           echo "All IntelliCore CI checks passed successfully."
+```
