@@ -5,7 +5,9 @@ import os
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from typing import Any
+from uuid import UUID, NAMESPACE_URL, uuid5
 
 logger = logging.getLogger(__name__)
 
@@ -18,20 +20,74 @@ TIMEOUT_SECONDS = 10
 MAX_RETRIES = 3
 
 
+def normalize_timestamp(value: Any) -> str:
+    """Convert timestamp into UTC ISO-8601 format."""
+    if value is None:
+        raise ValueError("Timestamp is required")
+
+    if isinstance(value, datetime):
+        timestamp = value
+    elif isinstance(value, str):
+        try:
+            timestamp = datetime.fromisoformat(
+                value.replace("Z", "+00:00")
+            )
+        except ValueError as exc:
+            raise ValueError("Invalid timestamp format") from exc
+    else:
+        raise ValueError("Timestamp must be a datetime or string")
+
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+
+    return (
+        timestamp.astimezone(timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+
+def normalize_event_id(value: Any, event_type: str) -> str:
+    """Validate UUID and generate a stable alert UUID."""
+    if not value:
+        raise ValueError("Event ID is required")
+
+    try:
+        source_uuid = UUID(str(value))
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise ValueError("Event ID must be a valid UUID") from exc
+
+    if event_type == "monitoring_result":
+        return str(source_uuid)
+
+    return str(
+        uuid5(
+            NAMESPACE_URL,
+            f"intellicore:agentic:alert:{source_uuid}",
+        )
+    )
+
+
 def normalize_agentic_event(
     event: dict[str, Any],
     event_type: str = "monitoring_result",
 ) -> dict[str, Any]:
-    """Convert a native Agentic AI event to the common event envelope."""
+    """Convert a native Agentic event into the common event envelope."""
+    if not isinstance(event, dict):
+        raise ValueError("Event must be a dictionary")
 
     if event_type not in ("monitoring_result", "alert"):
         raise ValueError(f"Unsupported event type: {event_type}")
 
-    event_id = event.get("event_id")
-    if not event_id:
-        raise ValueError("Agentic event must contain an event_id")
+    event_id = normalize_event_id(
+        event.get("event_id"),
+        event_type,
+    )
+
+    timestamp = normalize_timestamp(event.get("timestamp"))
 
     metadata = event.get("metadata") or {}
+
     if not isinstance(metadata, dict):
         metadata = {}
 
@@ -53,19 +109,15 @@ def normalize_agentic_event(
         "error": event.get("error"),
         "trace_id": event.get("trace_id"),
         "span_id": event.get("span_id"),
-        "system_type": "agentic_ai",
+        "system_type": event.get("system_type", "AGENT"),
         "metadata": metadata,
     }
 
     return {
-        "event_id": (
-            str(event_id)
-            if event_type == "monitoring_result"
-            else f"{event_id}-alert"
-        ),
+        "event_id": event_id,
         "event_type": event_type,
-        "timestamp": event.get("timestamp"),
-        "source": "agentic_ai",
+        "timestamp": timestamp,
+        "source": "agentic",
         "schema_version": "1.0",
         "data": data,
     }
@@ -75,7 +127,6 @@ def publish_central_event(
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     """Forward a normalized event to central ingestion with retries."""
-
     body = json.dumps(payload).encode("utf-8")
 
     request = urllib.request.Request(
@@ -91,7 +142,6 @@ def publish_central_event(
                 request,
                 timeout=TIMEOUT_SECONDS,
             ) as response:
-
                 response_body = response.read().decode("utf-8")
 
                 logger.info(
@@ -105,7 +155,6 @@ def publish_central_event(
                 }
 
         except urllib.error.HTTPError as exc:
-            # Retry rate limits, request timeouts and server errors.
             if exc.code not in (408, 429) and not (
                 500 <= exc.code <= 599
             ):
@@ -120,7 +169,11 @@ def publish_central_event(
                 exc.code,
             )
 
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            OSError,
+        ) as exc:
             logger.warning(
                 "Central ingestion request failed: %s",
                 exc,

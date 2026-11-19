@@ -42,8 +42,14 @@ def build_failure_state():
     }
 
 
-def test_agentic_failure_diagnosis():
+def test_agentic_failure_diagnosis(monkeypatch):
     """Verify tool failure is detected and diagnosed correctly."""
+
+    monkeypatch.setattr(
+        "app.execution_monitor.graph.publish_event",
+        lambda event: {"status": "published"},
+    )
+
     state = build_failure_state()
 
     state = execute_tools(state)
