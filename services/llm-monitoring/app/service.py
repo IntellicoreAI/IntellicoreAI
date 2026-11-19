@@ -11,6 +11,9 @@ from .metrics.errors import error_metrics
 from .schemas.event import EvaluateRequest, LLMEvent
 from .storage import save_event
 from .compliance import fintech_checks
+from .diagnosis.analyzer import diagnose_llm_execution
+from .recommendation.engine import generate_llm_recommendation
+from .signals.central_adapter import forward_llm_event
 
 def evaluate_request(req: EvaluateRequest) -> dict:
     trace_id, span_id = req.trace_id or str(uuid4()), req.span_id or str(uuid4())
@@ -53,8 +56,12 @@ def evaluate_request(req: EvaluateRequest) -> dict:
       "human_review_recommended": bool(risk_flags) or (overall is not None and overall < .6),
       "limitations": ["Scores are heuristic signals, not proof of factuality or safety.",
                       "Human review is required for high-impact financial decisions."]}
+    diagnosis = diagnose_llm_execution(result)
+    recommendation = generate_llm_recommendation(diagnosis, result)
+    result["diagnosis"], result["recommendation"] = diagnosis, recommendation
     metadata = dict(req.metadata)
-    metadata.update({"evaluations": evaluations, "metrics": result["metrics"], "risk_flags": result["risk_flags"],
+    if req.parent_span_id: metadata.setdefault("parent_span_id", req.parent_span_id)
+    metadata.update({"diagnosis": diagnosis, "recommendation": recommendation,"evaluations": evaluations, "metrics": result["metrics"], "risk_flags": result["risk_flags"],
                      "human_review_recommended": result["human_review_recommended"], "fintech_compliance": fintech, "user_id": req.user_id,
                      "session_id": req.session_id, "temperature": req.temperature, "top_p": req.top_p,
                      "top_k": req.top_k, "max_tokens": req.max_tokens, "stop_sequences": req.stop_sequences,
@@ -69,5 +76,7 @@ def evaluate_request(req: EvaluateRequest) -> dict:
              "expected_answer": redact_sensitive_text(req.expected_answer or "")},
       output={"response": redact_sensitive_text(req.response), "evaluations": evaluations}, latency=req.latency_ms,
       status=req.status, error=req.error, metadata=metadata)
-    save_event(event.model_dump(mode="json"))
+    stored = event.model_dump(mode="json")
+    save_event(stored)
+    forward_llm_event(stored, "monitoring_result")  # best-effort, non-blocking
     return result

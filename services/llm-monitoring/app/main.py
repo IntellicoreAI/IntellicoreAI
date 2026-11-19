@@ -2,7 +2,7 @@ import math, os
 from contextlib import asynccontextmanager
 from uuid import uuid4
 from datetime import datetime, timezone
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request, Response as FastAPIResponse
 from dotenv import load_dotenv
 load_dotenv()
 from fastapi.responses import Response
@@ -10,7 +10,9 @@ from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_
 from .schemas.event import EvaluateRequest, LLMEvent, FeedbackRequest, ChatRequest, DriftRequest, SemanticRequest
 from .service import evaluate_request
 from .storage import (save_event, list_events, save_feedback, list_feedback, event_exists,
-                      init_storage, save_alert, list_alerts)
+                      init_storage, save_alert, list_alerts, list_events_by_trace, storage_status)
+from .tracing import resolve_trace_context
+from .signals.central_adapter import forward_llm_event
 from .provider import chat_completion, create_embeddings, ProviderError
 from .drift import compare_windows
 from .compliance import fintech_checks
@@ -43,11 +45,22 @@ def _make_alerts(result: dict, fintech: dict | None = None):
     if metrics.get('latency_ms') is not None and metrics['latency_ms'] >= latency_limit: flags.append('high_latency')
     if result.get('overall_heuristic_score') is not None and result['overall_heuristic_score'] < quality_min: flags.append('low_response_quality')
     if fintech and fintech.get('flags'): flags.append('fintech_compliance_screen')
+    saved=[]
     for flag in sorted(set(flags)):
         severity = 'critical' if flag in {'request_error','possible_payment_card','possible_indian_aadhaar','possible_indian_pan','possible_bank_account'} else 'warning'
-        save_alert({'event_id':result['event_id'],'project_id':result['project_id'],'severity':severity,
+        saved.append(save_alert({'event_id':result['event_id'],'project_id':result['project_id'],'severity':severity,
                     'alert_type':flag,'message':f'LLM monitoring alert: {flag.replace("_", " ")}',
-                    'details':{'risk_flags':flags,'fintech_checks':fintech or {}}})
+                    'details':{'risk_flags':flags,'fintech_checks':fintech or {}}}))
+    if saved:  # one central 'alert' envelope per evaluated request
+        top = sorted(saved, key=lambda a: a['severity'] != 'critical')[0]
+        forward_llm_event({'event_id':result['event_id'],'timestamp':None,'project_id':result['project_id'],
+            'model_id':result.get('model_id'),'trace_id':result.get('trace_id'),'span_id':result.get('span_id'),
+            'event_type':'llm.alert','status':'error' if result['metrics'].get('is_error') else 'success',
+            'latency':metrics.get('latency_ms'),'error':metrics.get('error_message'),
+            'metadata':{'evaluations':result.get('evaluations'),'metrics':metrics,'risk_flags':sorted(set(flags)),
+                        'diagnosis':result.get('diagnosis'),'recommendation':result.get('recommendation')}},
+            'alert',{'severity':top['severity'],'alert_types':[a['alert_type'] for a in saved],'message':top['message']})
+    return saved
 
 @app.get('/')
 def home():
@@ -68,9 +81,19 @@ def get_events(project_id: str | None = None, limit: int = Query(default=100, ge
     rows=list_events(project_id,limit)
     return {'count':len(rows),'events':rows}
 
+def _apply_trace(req, request: Request) -> str:
+    """Adopt a propagated trace (body > X-Trace-Id > traceparent); otherwise leave None so one is generated."""
+    ctx=resolve_trace_context(req.trace_id, req.parent_span_id, request.headers)
+    req.trace_id=ctx['trace_id']; req.parent_span_id=ctx['parent_span_id']
+    req.metadata={**req.metadata,'trace_source':ctx['trace_source']}
+    if ctx['parent_span_id']: req.metadata['parent_span_id']=ctx['parent_span_id']
+    return ctx['trace_source']
+
 @app.post('/evaluate')
-def evaluate(req: EvaluateRequest):
+def evaluate(req: EvaluateRequest, request: Request, response: FastAPIResponse):
+    _apply_trace(req, request)
     result=evaluate_request(req)
+    response.headers['X-Trace-Id']=result['trace_id']
     REQUESTS.labels(status='error' if result['metrics']['is_error'] else 'success').inc()
     if req.latency_ms is not None: LATENCY.observe(req.latency_ms)
     fintech=fintech_checks(req.prompt,req.response)
@@ -79,11 +102,17 @@ def evaluate(req: EvaluateRequest):
     return result
 
 @app.post('/chat/completions')
-def monitored_chat(req: ChatRequest):
-    """Call a real OpenAI-compatible provider, evaluate its answer and persist telemetry."""
+def monitored_chat(req: ChatRequest, request: Request, response: FastAPIResponse):
+    """Call a real OpenAI-compatible provider, evaluate its answer and persist telemetry.
+
+    If the call is part of an agent execution, pass the agent's trace via body ``trace_id`` /
+    ``parent_span_id`` or the ``X-Trace-Id`` / ``X-Parent-Span-Id`` / ``traceparent`` headers.
+    """
+    trace_source=_apply_trace(req, request)
     try:
         provider=chat_completion(req.prompt,model=req.model,system_prompt=req.system_prompt,temperature=req.temperature,max_tokens=req.max_tokens)
         evaluation=EvaluateRequest(project_id=req.project_id,model_id=provider['model_id'],trace_id=req.trace_id,
+            span_id=req.span_id,parent_span_id=req.parent_span_id,
             prompt=req.prompt,response=provider['response'],context=req.context,latency_ms=provider['latency_ms'],
             input_tokens=provider['input_tokens'],output_tokens=provider['output_tokens'],
             cost_usd=_estimate_cost(provider['input_tokens'], provider['output_tokens']),
@@ -94,6 +123,7 @@ def monitored_chat(req: ChatRequest):
         result['fintech_compliance']=fintech
         _make_alerts(result,fintech)
         REQUESTS.labels(status='success').inc(); LATENCY.observe(provider['latency_ms'])
+        response.headers['X-Trace-Id']=result['trace_id']
         return {'provider':{'model':provider['model_id'],'response_id':provider['provider_response_id']},
                 'response':provider['response'],'usage':{'input_tokens':provider['input_tokens'],'output_tokens':provider['output_tokens'],'total_tokens':provider['total_tokens']},
                 'monitoring':result}
@@ -102,12 +132,19 @@ def monitored_chat(req: ChatRequest):
         # Persist a failed provider-call event too, so failures are observable.
         now=datetime.now(timezone.utc); event_id=str(uuid4())
         failed=LLMEvent(event_id=event_id,timestamp=now,project_id=req.project_id,model_id=req.model or os.getenv('LLM_MODEL'),
-            trace_id=req.trace_id or str(uuid4()),span_id=str(uuid4()),event_type='llm.provider_call',
+            trace_id=req.trace_id or str(uuid4()),span_id=req.span_id or str(uuid4()),event_type='llm.provider_call',
             input={'prompt':'[redacted from provider-error event]'},output=None,latency=None,status='error',error=str(exc),
-            metadata={'provider':'openai-compatible','failure_stage':'provider_request','user_id':req.user_id})
-        save_event(failed.model_dump(mode='json'))
+            metadata={'provider':'openai-compatible','failure_stage':'provider_request','user_id':req.user_id,
+                      'trace_source':trace_source,'parent_span_id':req.parent_span_id,
+                      'risk_flags':['request_error'],
+                      'diagnosis':{'diagnosis_detected':True,'root_cause':'provider_request_failure','category':'reliability','severity':'high',
+                                   'explanation':'The LLM request failed, so no usable model response was produced.','evidence':[{'type':'error','message':str(exc)}]}})
+        stored_failed=failed.model_dump(mode='json')
+        save_event(stored_failed)
+        forward_llm_event(stored_failed,'monitoring_result')
         save_alert({'event_id':event_id,'project_id':req.project_id,'severity':'critical','alert_type':'provider_error',
                     'message':'LLM provider request failed','details':{'error':str(exc)}})
+        forward_llm_event(stored_failed,'alert',{'severity':'critical','alert_types':['provider_error'],'message':'LLM provider request failed'})
         raise HTTPException(status_code=502,detail={'message':str(exc),'event_id':event_id}) from exc
 
 @app.get('/summary')
@@ -169,3 +206,29 @@ def get_alerts(project_id: str | None = None, limit: int = Query(default=100,ge=
 @app.get('/metrics')
 def metrics():
     return Response(generate_latest(),media_type=CONTENT_TYPE_LATEST)
+
+
+@app.get('/storage/status')
+def get_storage_status():
+    """Verify that LLM events are persisted in the shared PostgreSQL events table (not just memory)."""
+    return storage_status()
+
+@app.get('/traces/{trace_id}')
+def get_trace(trace_id: str):
+    """All events sharing a trace_id across paradigms (LLM + AGENT), to verify trace propagation."""
+    rows=list_events_by_trace(trace_id)
+    by_type={}
+    for r in rows: by_type[r.get('system_type','LLM')]=by_type.get(r.get('system_type','LLM'),0)+1
+    return {'trace_id':trace_id,'count':len(rows),'system_types':by_type,'events':rows}
+
+@app.get('/events/{event_id}/evidence')
+def get_event_evidence(event_id: str):
+    """LLM evaluation results for one event, packaged as evidence for the Decision Pipeline."""
+    row=next((r for r in list_events(None,1000) if str(r.get('event_id'))==event_id),None)
+    if row is None: raise HTTPException(status_code=404,detail='event_id not found')
+    md=row.get('metadata') or {}
+    return {'event_id':event_id,'trace_id':row.get('trace_id'),'span_id':row.get('span_id'),'project_id':row.get('project_id'),
+            'model_id':row.get('model_id'),'status':row.get('status'),'latency_ms':row.get('latency'),
+            'evaluations':md.get('evaluations'),'metrics':md.get('metrics'),'risk_flags':md.get('risk_flags',[]),
+            'fintech_compliance':md.get('fintech_compliance'),'diagnosis':md.get('diagnosis'),'recommendation':md.get('recommendation'),
+            'human_review_recommended':md.get('human_review_recommended')}

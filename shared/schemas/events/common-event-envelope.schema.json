@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "IntelliCore Common Event Envelope",
+  "description": "Six-field envelope every monitoring adapter (ml, llm, agentic) sends to central ingestion.",
+  "type": "object",
+  "required": ["timestamp", "source", "schema_version", "event_id", "event_type", "data"],
+  "properties": {
+    "timestamp": { "type": "string", "format": "date-time", "description": "When the event occurred (UTC)." },
+    "source": { "type": "string", "minLength": 1, "description": "Monitoring module that generated the event, e.g. ml, llm, agentic." },
+    "schema_version": { "type": "string", "const": "1.0", "description": "Version of the common event contract." },
+    "event_id": { "type": "string", "format": "uuid", "description": "Unique identifier for the event." },
+    "event_type": { "type": "string", "enum": ["monitoring_result", "alert"], "description": "Type of monitoring event." },
+    "data": { "type": "object", "description": "Module-specific monitoring results and findings." }
+  },
+  "additionalProperties": false
+}

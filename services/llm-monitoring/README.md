@@ -50,3 +50,12 @@ Persisted LLM events use the existing `shared/schemas/events/base-event.schema.j
 - Use approved provider settings and avoid sending secrets, payment credentials, or unnecessary personal data to an external LLM.
 
 See `docs/API_AND_STAGE2_INTEGRATION.md` for the shared Stage 2 event contract, example event, and end-to-end demonstration procedure.
+
+## Central adapter, trace propagation and diagnosis
+
+* `app/signals/central_adapter.py` converts every evaluated request (and every alert) to the six-field common envelope and forwards it
+  in the background to `CENTRAL_INGESTION_URL`. Set `CENTRAL_INGESTION_ENABLED=false` to disable.
+* To make an LLM call part of an agent execution send the agent's trace: JSON `trace_id`/`parent_span_id`, or headers `X-Trace-Id`
+  and `X-Parent-Span-Id` (or W3C `traceparent`). The response echoes `X-Trace-Id`. `GET /traces/{trace_id}` shows LLM + agent events together.
+* `GET /storage/status` verifies events are persisted in the shared PostgreSQL `events` table (set `REQUIRE_POSTGRES=true` to fail fast).
+* Each evaluation now includes `diagnosis` and `recommendation`; `GET /events/{event_id}/evidence` returns the evaluation evidence.

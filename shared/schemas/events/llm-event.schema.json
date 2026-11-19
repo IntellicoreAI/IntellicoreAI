@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "IntelliCore LLM Event",
+  "description": "LLM telemetry event extending the common IntelliCore event contract.",
+  "allOf": [
+    { "$ref": "./base-event.schema.json" },
+    {
+      "type": "object",
+      "properties": {
+        "system_type": { "const": "LLM" },
+        "metadata": {
+          "type": "object",
+          "properties": {
+            "evaluations": { "type": "object", "description": "groundedness, hallucination, relevance, response_quality, safety results." },
+            "metrics": { "type": "object" },
+            "risk_flags": { "type": "array", "items": { "type": "string" } },
+            "human_review_recommended": { "type": "boolean" },
+            "fintech_compliance": { "type": "object" },
+            "diagnosis": { "type": "object" },
+            "recommendation": { "type": "object" },
+            "parent_span_id": { "type": ["string", "null"], "description": "Agent span that triggered this LLM call." },
+            "trace_source": { "type": "string", "enum": ["request_body", "header", "traceparent", "generated"] }
+          }
+        }
+      }
+    }
+  ]
+}

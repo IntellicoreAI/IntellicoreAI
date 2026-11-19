@@ -26,6 +26,7 @@ class EvaluateRequest(BaseModel):
     model_id: str | None = None
     trace_id: str | None = None
     span_id: str | None = None
+    parent_span_id: str | None = None  # agent span that triggered this LLM call
     prompt: str = ""
     response: str = ""
     context: str | list[str] | None = None
@@ -71,6 +72,8 @@ class ChatRequest(BaseModel):
     temperature: float = Field(default=0.2, ge=0, le=2)
     max_tokens: int = Field(default=512, ge=1, le=8192)
     trace_id: str | None = None
+    span_id: str | None = None
+    parent_span_id: str | None = None  # agent span that triggered this LLM call
     user_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 

@@ -1,4 +1,5 @@
 """PostgreSQL persistence with an in-memory fallback for isolated tests/development."""
+import logging
 import os
 from threading import Lock
 from typing import Any
@@ -27,6 +28,10 @@ def _jsonable(value):
 def init_storage() -> None:
     """Create LLM-owned tables. Does not alter shared or Agentic AI tables."""
     if not _dsn():
+        if os.getenv("REQUIRE_POSTGRES", "").strip().lower() in {"1", "true", "yes"}:
+            raise RuntimeError("REQUIRE_POSTGRES is set but DATABASE_URL is missing; LLM events would not be persisted.")
+        logging.getLogger(__name__).warning(
+            "DATABASE_URL is not set: LLM events are kept in memory only and are NOT written to the shared events table.")
         return
     import psycopg
     with psycopg.connect(_dsn()) as conn:
@@ -133,3 +138,35 @@ def list_alerts(project_id: str | None = None, limit: int = 100) -> list[dict]:
             rows = conn.execute("SELECT alert_id,event_id,project_id,severity,alert_type,message,details,created_at,acknowledged FROM llm_alerts ORDER BY created_at DESC LIMIT %s", (limit,)).fetchall()
     keys=['alert_id','event_id','project_id','severity','alert_type','message','details','created_at','acknowledged']
     return [dict(zip(keys,r)) for r in rows]
+
+
+def list_events_by_trace(trace_id: str) -> list[dict]:
+    """All events (any paradigm) sharing a trace_id, oldest first. Used to verify LLM/agent correlation."""
+    keys = ['event_id','timestamp','system_type','project_id','model_id','trace_id','span_id','event_type','input','output','latency','status','error','metadata']
+    if not _dsn():
+        with _lock: rows = [r for r in _memory_events if r.get('trace_id') == trace_id]
+        return rows
+    import psycopg
+    with psycopg.connect(_dsn()) as conn:
+        rows = conn.execute("SELECT event_id,timestamp,system_type,project_id,model_id,trace_id,span_id,event_type,input,output,latency,status,error,metadata FROM events WHERE trace_id=%s ORDER BY timestamp ASC", (trace_id,)).fetchall()
+    return [dict(zip(keys, r)) for r in rows]
+
+
+def storage_status() -> dict:
+    """Report whether LLM events are really reaching the shared PostgreSQL events table."""
+    if not _dsn():
+        with _lock: n = len(_memory_events)
+        return {'backend': 'in-memory', 'persisted_to_postgres': False, 'events_table_reachable': False,
+                'llm_event_count': n,
+                'warning': 'DATABASE_URL is not set; events are lost on restart and are invisible to the diagnosis service.'}
+    import psycopg
+    try:
+        with psycopg.connect(_dsn(), connect_timeout=5) as conn:
+            exists = conn.execute("SELECT to_regclass('public.events') IS NOT NULL").fetchone()[0]
+            count = conn.execute("SELECT count(*) FROM events WHERE system_type='LLM'").fetchone()[0] if exists else 0
+            latest = conn.execute("SELECT max(timestamp) FROM events WHERE system_type='LLM'").fetchone()[0] if exists else None
+        return {'backend': 'postgres', 'persisted_to_postgres': bool(exists), 'events_table_reachable': bool(exists),
+                'llm_event_count': count, 'latest_llm_event': latest.isoformat() if latest else None}
+    except Exception as exc:
+        return {'backend': 'postgres', 'persisted_to_postgres': False, 'events_table_reachable': False,
+                'error': f'{type(exc).__name__}: {exc}'}
