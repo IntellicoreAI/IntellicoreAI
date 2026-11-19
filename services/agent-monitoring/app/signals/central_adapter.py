@@ -1,4 +1,4 @@
-```python
+
 import json
 import logging
 import os
@@ -204,4 +204,4 @@ def publish_central_event(
     raise RuntimeError(
         "Central ingestion failed after all retry attempts"
     )
-```
+
